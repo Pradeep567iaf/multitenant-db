@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .endpoints import auth, superadmin, tenant, billing, billing_celery, email_test
+from .endpoints import auth, superadmin, tenant, billing, billing_celery
 
 api_router = APIRouter()
 
@@ -17,6 +17,3 @@ api_router.include_router(billing.router, tags=["Billing"])
 
 # Celery-based Billing routes
 api_router.include_router(billing_celery.router, tags=["Billing - Celery"])
-
-# Email test route
-api_router.include_router(email_test.router, prefix="/email", tags=["Email Testing"])
