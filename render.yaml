@@ -1,11 +1,13 @@
-# Render.com deployment configuration
+# Render Configuration for Multi-Tenant System
+# This file should be named render.yaml in your project root
+
 services:
   - type: web
     name: multitenant-api
     runtime: python
     plan: free
     buildCommand: pip install -r requirements-prod.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --log-level info
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -23,3 +25,30 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
+      - key: CRON_SECRET
+        sync: false
+
+cron:
+  # Monthly billing emails - runs on 1st of every month at midnight UTC
+  - name: monthly-bulk-billing-emails
+    schedule: "0 0 1 * *"
+    command: |
+      curl -X POST https://YOUR_APP_NAME.onrender.com/api/v1/billing/cron/bulk-billing-emails \
+      -H "Authorization: Bearer $CRON_SECRET" \
+      -H "Content-Type: application/json"
+    
+  # Alternative: Weekly billing check (every Monday at midnight)
+  # - name: weekly-billing-check
+  #   schedule: "0 0 * * 1"
+  #   command: |
+  #     curl -X POST https://YOUR_APP_NAME.onrender.com/api/v1/billing/cron/bulk-billing-emails \
+  #     -H "Authorization: Bearer $CRON_SECRET" \
+  #     -H "Content-Type: application/json"
+
+  # Alternative: Daily billing check (at midnight)
+  # - name: daily-billing-check
+  #   schedule: "0 0 * * *"
+  #   command: |
+  #     curl -X POST https://YOUR_APP_NAME.onrender.com/api/v1/billing/cron/bulk-billing-emails \
+  #     -H "Authorization: Bearer $CRON_SECRET" \
+  #     -H "Content-Type: application/json"
