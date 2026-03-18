@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
     # Celery & Redis
-    CELERY_BROKER_URL: str
-    CELERY_RESULT_BACKEND: str
+    CELERY_BROKER_URL: Optional[str] = None
+    CELERY_RESULT_BACKEND: Optional[str] = None
     
     # Email
     SMTP_HOST: str
@@ -23,8 +23,12 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str
     EMAIL_FROM: str
     
+    # Deployment
+    RENDER: Optional[bool] = False
+    
     class Config:
         env_file = ".env"
+        extra = "ignore"  # Ignore extra environment variables
 
 
 settings = Settings()
