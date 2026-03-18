@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from app.services.email_service import EmailService
 from app.services.billing_service import BillingService
 from sqlalchemy.orm import Session
@@ -53,6 +53,71 @@ async def send_billing_emails_synchronously(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Billing email sending failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Billing email sending failed: {str(e)}")
+
+@router.post("/cron/billing-emails")
+async def cron_billing_emails(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Cron job endpoint for sending monthly billing emails.
+    Requires authorization header for security.
+    """
+    # Simple authorization check (use a strong secret in production)
+    CRON_SECRET = "your-cron-secret-key"  # Set this in Render environment variables
+    
+    if not authorization or authorization != f"Bearer {CRON_SECRET}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    try:
+        logger.info("📅 Cron job triggered: Sending monthly billing emails")
+        
+        # Get all tenants' billing data
+        all_billing_data = BillingService.get_all_tenants_billing(db)
+        
+        if not all_billing_data:
+            logger.info("No billing data found for this period")
+            return {"message": "No billing data found", "processed": 0}
+        
+        # Send emails
+        success_count = 0
+        failed_count = 0
+        
+        for billing_info in all_billing_data:
+            try:
+                result = EmailService.send_billing_email(
+                    tenant_email=billing_info["tenant_email"],
+                    tenant_name=billing_info["tenant_name"],
+                    total_amount=billing_info["total_amount"],
+                    billing_period_start=billing_info["billing_period_start"],
+                    billing_period_end=billing_info["billing_period_end"],
+                    breakdown=billing_info["breakdown"]
+                )
+                
+                if result["success"]:
+                    success_count += 1
+                    logger.info(f"✅ Email sent to {billing_info['tenant_email']}")
+                else:
+                    failed_count += 1
+                    logger.warning(f"❌ Failed to send email to {billing_info['tenant_email']}: {result['error']}")
+                    
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Error sending email to {billing_info['tenant_email']}: {str(e)}")
+        
+        logger.info(f"📊 Cron job completed: {success_count} successful, {failed_count} failed")
+        
+        return {
+            "message": "Monthly billing emails processed",
+            "total_processed": len(all_billing_data),
+            "successful": success_count,
+            "failed": failed_count,
+            "timestamp": __import__('datetime').datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Cron job failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cron job failed: {str(e)}")
 
 @router.post("/send-billing-emails-async-emulation")
 async def send_billing_emails_async_emulation(db: Session = Depends(get_db)):
