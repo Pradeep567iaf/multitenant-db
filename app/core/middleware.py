@@ -62,6 +62,10 @@ class SubdomainMiddleware(BaseHTTPMiddleware):
         # Check for localhost or IP addresses
         if host in ["localhost", "127.0.0.1", "::1"]:
             return None
+            
+        # Check for Render domain - don't treat as subdomain
+        if host == "multitenant-db.onrender.com":
+            return None
         
         # Split by dots
         parts = host.split(".")
