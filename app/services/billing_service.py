@@ -41,7 +41,8 @@ class BillingService:
         usage = FeatureUsage(
             tenant_id=tenant_id,
             feature_code=feature_code,
-            cost=feature.cost
+            usage_count=1,
+            total_cost=feature.cost
         )
         db.add(usage)
         
@@ -50,35 +51,48 @@ class BillingService:
         next_month = current_period_start + timedelta(days=32)
         current_period_end = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
+        # Get existing billing for this tenant and period
         billing = db.query(Billing).filter(
             Billing.tenant_id == tenant_id,
-            Billing.feature_code == feature_code,
-            Billing.billing_period_start >= current_period_start,
-            Billing.billing_period_start < current_period_end
+            Billing.billing_period_start == current_period_start.date(),
+            Billing.billing_period_end == current_period_end.date()
         ).first()
         
         if billing:
+            # Update existing billing
+            billing.total_amount = billing.total_amount + feature.cost
             billing.usage_count += 1
-            billing.total_cost += feature.cost
         else:
+            # Create new billing
             billing = Billing(
                 tenant_id=tenant_id,
-                feature_code=feature_code,
+                feature_code=feature_code,  # Include feature code
                 usage_count=1,
-                total_cost=feature.cost,
-                billing_period_start=current_period_start,
-                billing_period_end=current_period_end
+                total_amount=feature.cost,
+                billing_period_start=current_period_start.date(),
+                billing_period_end=current_period_end.date()
             )
             db.add(billing)
+            db.flush()  # Get the billing ID
         
+        # Link usage to billing
+        usage.billing_id = billing.id
         db.commit()
         db.refresh(billing)
+        
+        # Calculate total usage for this feature in current period
+        total_usage = db.query(FeatureUsage).filter(
+            FeatureUsage.tenant_id == tenant_id,
+            FeatureUsage.feature_code == feature_code,
+            FeatureUsage.created_at >= current_period_start,
+            FeatureUsage.created_at < current_period_end
+        ).count()
         
         return {
             "feature_code": feature_code,
             "cost": feature.cost,
-            "total_usage_count": billing.usage_count,
-            "total_cost": billing.total_cost
+            "total_usage_count": total_usage,
+            "total_cost": float(billing.total_amount)
         }
     
     @staticmethod
@@ -88,25 +102,56 @@ class BillingService:
         next_month = current_period_start + timedelta(days=32)
         current_period_end = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
-        billings = db.query(Billing).filter(
+        # Get tenant info for subdomain
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant:
+            return {
+                "total_amount": 0.0,
+                "billing_period_start": current_period_start,
+                "billing_period_end": current_period_end,
+                "breakdown": []
+            }
+        
+        # Get billing for current period
+        billing = db.query(Billing).filter(
             Billing.tenant_id == tenant_id,
-            Billing.billing_period_start >= current_period_start,
-            Billing.billing_period_start < current_period_end
+            Billing.billing_period_start == current_period_start.date(),
+            Billing.billing_period_end == current_period_end.date()
+        ).first()
+        
+        if not billing:
+            return {
+                "total_amount": 0.0,
+                "tenant_subdomain": tenant.subdomain,  # Include subdomain
+                "billing_period_start": current_period_start,
+                "billing_period_end": current_period_end,
+                "breakdown": []
+            }
+        
+        # Get feature usages for breakdown
+        usages = db.query(FeatureUsage).filter(
+            FeatureUsage.billing_id == billing.id
         ).all()
         
-        total_amount = sum(b.total_cost for b in billings)
+        breakdown = []
+        feature_totals = {}
         
-        breakdown = [
-            {
-                "feature_code": b.feature_code,
-                "usage_count": b.usage_count,
-                "total_cost": b.total_cost
-            }
-            for b in billings
-        ]
+        # Aggregate by feature
+        for usage in usages:
+            if usage.feature_code not in feature_totals:
+                feature_totals[usage.feature_code] = {
+                    "feature_code": usage.feature_code,
+                    "usage_count": 0,
+                    "total_cost": 0.0
+                }
+            feature_totals[usage.feature_code]["usage_count"] += usage.usage_count
+            feature_totals[usage.feature_code]["total_cost"] += float(usage.total_cost)
+        
+        breakdown = list(feature_totals.values())
         
         return {
-            "total_amount": total_amount,
+            "total_amount": float(billing.total_amount),
+            "tenant_subdomain": tenant.subdomain,  # Include subdomain
             "billing_period_start": current_period_start,
             "billing_period_end": current_period_end,
             "breakdown": breakdown
@@ -115,9 +160,21 @@ class BillingService:
     @staticmethod
     def get_billing_history(db: Session, tenant_id: int) -> List[Billing]:
         """Get billing history for a tenant."""
-        return db.query(Billing).filter(
+        billings = db.query(Billing).filter(
             Billing.tenant_id == tenant_id
         ).order_by(Billing.billing_period_start.desc()).all()
+        
+        # Add tenant subdomain to each billing record and ensure proper values
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if tenant:
+            for billing in billings:
+                # Add subdomain as an attribute (will be picked up by Pydantic)
+                billing.tenant_subdomain = tenant.subdomain
+                # Ensure total_cost is not None (use total_amount if needed)
+                if billing.total_cost is None and billing.total_amount is not None:
+                    billing.total_cost = float(billing.total_amount)
+        
+        return billings
     
     @staticmethod
     def get_all_tenants_billing(db: Session) -> List[dict]:
@@ -130,22 +187,36 @@ class BillingService:
         
         all_billing = []
         for tenant in tenants:
-            billings = db.query(Billing).filter(
+            # Get billing for current period
+            billing = db.query(Billing).filter(
                 Billing.tenant_id == tenant.id,
-                Billing.billing_period_start >= current_period_start,
-                Billing.billing_period_start < current_period_end
-            ).all()
+                Billing.billing_period_start == current_period_start.date(),
+                Billing.billing_period_end == current_period_end.date()
+            ).first()
             
-            total_amount = sum(b.total_cost for b in billings)
-            
-            breakdown = [
-                {
-                    "feature_code": b.feature_code,
-                    "usage_count": b.usage_count,
-                    "total_cost": b.total_cost
-                }
-                for b in billings
-            ]
+            if not billing:
+                total_amount = 0.0
+                breakdown = []
+            else:
+                total_amount = float(billing.total_amount)
+                
+                # Get feature usages for breakdown
+                usages = db.query(FeatureUsage).filter(
+                    FeatureUsage.billing_id == billing.id
+                ).all()
+                
+                feature_totals = {}
+                for usage in usages:
+                    if usage.feature_code not in feature_totals:
+                        feature_totals[usage.feature_code] = {
+                            "feature_code": usage.feature_code,
+                            "usage_count": 0,
+                            "total_cost": 0.0
+                        }
+                    feature_totals[usage.feature_code]["usage_count"] += usage.usage_count
+                    feature_totals[usage.feature_code]["total_cost"] += float(usage.total_cost)
+                
+                breakdown = list(feature_totals.values())
             
             all_billing.append({
                 "tenant_id": tenant.id,

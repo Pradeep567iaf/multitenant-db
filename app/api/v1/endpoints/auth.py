@@ -14,10 +14,11 @@ from ....schemas import (
     TenantUserResponse,
     SuperAdminResponse
 )
+from ....schemas.auth import TenantLoginRequest,TenantUserCreateWithSubdomain
 from ....core.security import get_password_hash, create_access_token, verify_password
 from ....core.authentication import get_current_superadmin, get_current_tenant_user
 from ....core.middleware import SubdomainMiddleware
-
+from ....services.billing_service import BillingService
 router = APIRouter()
 
 
@@ -85,24 +86,32 @@ async def superadmin_login(
 
 @router.post("/tenant/login")
 async def tenant_login(
-    login_data: SuperAdminLogin,  # Reusing schema for email/password
-    db: Session = Depends(get_db),
-    request: Request = None
+    login_data: TenantLoginRequest,
+    db: Session = Depends(get_db)
 ):
-    """Login as Tenant user."""
-    # Get tenant from request state (set by middleware)
-    tenant_id = getattr(request.state, 'tenant_id', None)
+    """Login as Tenant user with subdomain parameter."""
+    # Validate tenant exists with the provided subdomain
+    tenant = db.query(Tenant).filter(
+        Tenant.subdomain == login_data.subdomain,
+        Tenant.email == login_data.email
+    ).first()
     
-    if not tenant_id:
+    if not tenant:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid subdomain"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tenant with subdomain '{login_data.subdomain}' and email '{login_data.email}' not found"
         )
     
-    # Find user by email and tenant_id
+    if not tenant.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant account is deactivated"
+        )
+    
+    # Find tenant user
     user = db.query(TenantUser).filter(
         TenantUser.email == login_data.email,
-        TenantUser.tenant_id == tenant_id
+        TenantUser.tenant_id == tenant.id
     ).first()
     
     if not user or not verify_password(login_data.password, user.hashed_password):
@@ -119,7 +128,6 @@ async def tenant_login(
         )
     
     # Check if tenant has selected a plan
-    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     plan_selection_required = tenant.plan_id is None
     
     # Create access token
@@ -128,7 +136,7 @@ async def tenant_login(
         data={
             "sub": user.email,
             "user_id": user.id,
-            "tenant_id": tenant_id,
+            "tenant_id": tenant.id,
             "role": user.role,
             "is_superadmin": False
         },
@@ -136,9 +144,66 @@ async def tenant_login(
         is_superadmin=False
     )
     
-    return {
+    response_data = {
         "access_token": access_token,
         "token_type": "bearer",
         "plan_selection_required": plan_selection_required,
         "tenant_name": tenant.name
     }
+    
+    # If plan is already selected, include current billing info
+    if not plan_selection_required:
+        current_billing = BillingService.get_current_billing(db, tenant.id)
+        if current_billing:
+            response_data["current_billing_total"] = current_billing.get("total_cost")
+    
+    return response_data
+
+
+@router.post("/tenant/users", response_model=TenantUserResponse, status_code=status.HTTP_201_CREATED)
+async def create_tenant_user_with_subdomain(
+    user_data: TenantUserCreateWithSubdomain,
+    db: Session = Depends(get_db)
+):
+    """Create a new tenant user with subdomain parameter."""
+    # Validate tenant exists with the provided subdomain
+    tenant = db.query(Tenant).filter(
+        Tenant.subdomain == user_data.subdomain
+    ).first()
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tenant with subdomain '{user_data.subdomain}' not found"
+        )
+    
+    if not tenant.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant account is deactivated"
+        )
+    
+    # Check if user already exists
+    existing_user = db.query(TenantUser).filter(
+        TenantUser.email == user_data.email,
+        TenantUser.tenant_id == tenant.id
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User with this email already exists in this tenant"
+        )
+    
+    # Create new user
+    user = TenantUser(
+        email=user_data.email,
+        hashed_password=get_password_hash(user_data.password),
+        role=user_data.role,
+        tenant_id=tenant.id
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    return user

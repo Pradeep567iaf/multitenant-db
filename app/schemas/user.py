@@ -15,12 +15,15 @@ class TenantUserCreate(TenantUserBase):
 class TenantUserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     role: Optional[str] = Field(None, pattern="^(admin|user)$")
-    is_active: Optional[bool] = None
+    is_active: Optional[bool] = Field(None, description="Set user active status")
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TenantUserResponse(TenantUserBase):
     id: int
     tenant_id: int
+    tenant_subdomain: Optional[str] = None  # Added subdomain field
     is_active: bool
     created_at: datetime
     

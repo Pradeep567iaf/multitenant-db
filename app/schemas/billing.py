@@ -10,18 +10,22 @@ class FeatureUsageCreate(BaseModel):
 class BillingResponse(BaseModel):
     id: int
     tenant_id: int
-    feature_code: str
+    tenant_subdomain: Optional[str] = None
+    feature_code: Optional[str] = None
     usage_count: int
-    total_cost: float
+    total_amount: float
+    total_cost: Optional[float] = None  # Make it truly optional
     billing_period_start: datetime
-    billing_period_end: Optional[datetime] = None
+    billing_period_end: datetime
     is_sent: bool
+    created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
 
 
 class CurrentBillingResponse(BaseModel):
     total_amount: float
+    tenant_subdomain: Optional[str] = None  # Added subdomain field
     billing_period_start: datetime
     billing_period_end: datetime
     breakdown: List[dict]

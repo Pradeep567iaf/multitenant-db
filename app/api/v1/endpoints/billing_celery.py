@@ -35,19 +35,19 @@ async def trigger_billing_emails_celery(
     }
 
 
-@router.get("/billing/task-status/{task_id}")
-async def get_task_status(
-    task_id: str,
-    current_superadmin: SuperAdmin = Depends(get_current_superadmin)
-):
-    """Get status of a Celery task."""
-    from celery.result import AsyncResult
-    from ....tasks.celery_tasks import celery_app
+# @router.get("/billing/task-status/{task_id}")
+# async def get_task_status(
+#     task_id: str,
+#     current_superadmin: SuperAdmin = Depends(get_current_superadmin)
+# ):
+#     """Get status of a Celery task."""
+#     from celery.result import AsyncResult
+#     from ....tasks.celery_tasks import celery_app
     
-    task_result = AsyncResult(task_id, app=celery_app)
+#     task_result = AsyncResult(task_id, app=celery_app)
     
-    return {
-        "task_id": task_id,
-        "status": task_result.status,
-        "result": task_result.result if task_result.ready() else None
-    }
+#     return {
+#         "task_id": task_id,
+#         "status": task_result.status,
+#         "result": task_result.result if task_result.ready() else None
+#     }
